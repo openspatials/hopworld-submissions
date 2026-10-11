@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<title>Ember Hop</title>
+<style>
+  body { margin: 0; background: #1a1210; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { background: #2a1d18; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="450"></canvas>
+<script>
+// Ember Hop: a one-file canvas platformer. Arrow keys or A/D to run, Up, W or Space to jump.
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hero = { x: 120, y: 300, w: 28, h: 40, vx: 0, vy: 0, onGround: false, color: '#ff7a3d', facing: 1 };
+const platforms = [
+  { x: 0, y: 410, w: 800, h: 40 },
+  { x: 260, y: 330, w: 140, h: 14 },
+  { x: 470, y: 270, w: 140, h: 14 },
+];
+const embers = [{ x: 320, y: 300 }, { x: 530, y: 240 }, { x: 700, y: 380 }];
+let score = 0;
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+function update(dt) {
+  const left = keys.ArrowLeft || keys.a, right = keys.ArrowRight || keys.d;
+  hero.vx = (right ? 1 : 0) - (left ? 1 : 0);
+  if (hero.vx) hero.facing = hero.vx;
+  hero.x += hero.vx * 220 * dt;
+  if ((keys.ArrowUp || keys.w || keys[' ']) && hero.onGround) { hero.vy = -520; hero.onGround = false; }
+  hero.vy += 1400 * dt;
+  hero.y += hero.vy * dt;
+  hero.onGround = false;
+  for (const p of platforms) {
+    if (hero.x + hero.w > p.x && hero.x < p.x + p.w && hero.y + hero.h > p.y && hero.y + hero.h < p.y + p.h + 20 && hero.vy >= 0) {
+      hero.y = p.y - hero.h; hero.vy = 0; hero.onGround = true;
+    }
+  }
+  hero.x = Math.max(0, Math.min(canvas.width - hero.w, hero.x));
+  for (const e of embers) {
+    if (!e.taken && Math.abs(e.x - (hero.x + hero.w / 2)) < 20 && Math.abs(e.y - (hero.y + hero.h / 2)) < 30) { e.taken = true; score++; }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#5b3a2e';
+  for (const p of platforms) ctx.fillRect(p.x, p.y, p.w, p.h);
+  ctx.fillStyle = '#ffcc33';
+  for (const e of embers) if (!e.taken) { ctx.beginPath(); ctx.arc(e.x, e.y, 7, 0, Math.PI * 2); ctx.fill(); }
+  // the hero
+  const hopRect = { x: hero.x, y: hero.y, w: hero.w, h: hero.h }; // HOP
+  const drawOwnBody = (color) => {
+    ctx.fillStyle = color || hero.color;
+    ctx.fillRect(hero.x, hero.y, hero.w, hero.h);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(hero.x + (hero.facing > 0 ? 18 : 4), hero.y + 8, 6, 6);
+  };
+  if (window.hopAdapter) window.hopAdapter.draw(ctx, hopRect, drawOwnBody, { facing: hero.facing }); else drawOwnBody(null); // HOP
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  ctx.fillText('Embers: ' + score, 12, 24);
+  window.hopAdapter?.drawMessages(ctx); // HOP
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt);
+  window.hopAdapter?.update(dt, { x: hero.x, y: hero.y, w: hero.w, h: hero.h }, !!hero.vx); // HOP
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+<script type="module" src="./hop-hook.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "hop": "0.2-draft",
+  "name": "Ember Hop",
+  "url": "https://openspatials.com/hopworld/games/grigb/ember-hop/",
+  "accepts": {
+    "rungs": [
+      3,
+      4
+    ],
+    "itemKinds": [
+      "cosmetic"
+    ],
+    "maxBytes": 2000000
+  },
+  "exit": "https://openspatials.com/hopworld/directory/"
+}
