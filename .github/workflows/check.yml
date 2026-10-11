@@ -1,0 +1,120 @@
+# Hopworld submission check: the GitHub Actions workflow of openspatials/hopworld-submissions.
+#
+# ACTIVE. It runs on every pull request to this repository that touches games/ or characters/. It was
+# made at launch (Hopworld 0.2.0) from the template src/submit/github-actions/check.yml in the Hopworld
+# tools, with the two values under "env" filled in: the v0.2.0 release package and its SHA-256.
+#
+# What it does on every pull request that touches games/ or characters/:
+#   1. finds each submission folder the pull request adds or changes: games/<owner>/<game>/ or
+#      characters/<owner>/<character>/;
+#   2. downloads the Hopworld tools from a pinned release package and checks its SHA-256, so the
+#      checks themselves never come from the pull request;
+#   3. runs src/submit/check.mjs on each folder, with --author set to the pull request's author, so a
+#      folder under someone else's name fails;
+#   4. fails the pull request when any check fails, and keeps each report as a build artifact.
+# Passing is not publishing: a maintainer reviews every submission and publishes it with
+# src/submit/publish.mjs (docs/package/HOSTING-AND-SUBMISSIONS.md).
+#
+# Safety: the workflow uses "pull_request", never "pull_request_target", so a pull request from a
+# fork runs with a read-only token and no secrets. The submitted game runs only inside headless
+# Chrome on GitHub's throwaway runner. Checkout keeps no credentials.
+
+name: Hopworld submission check
+
+on:
+  pull_request:
+    paths:
+      - "games/**"
+      - "characters/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hopworld-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Filled in at launch: the address of the Hopworld release package (.tar.gz) and its SHA-256.
+  # A new tools version means a new release package, and both values change together.
+  HOPWORLD_TOOLS_URL: "https://github.com/openspatials/hopworld-submissions/releases/download/v0.2.0/hopworld-0.2.0.tar.gz"
+  HOPWORLD_TOOLS_SHA256: "85db09958110354b142c5b6ebf987da324e7cc4b95ebd517e115ceb1afbff28a"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Get the Hopworld tools (pinned and checksummed)
+        run: |
+          set -euo pipefail
+          if [ "$HOPWORLD_TOOLS_URL" = "FILL-IN-AT-LAUNCH" ] || [ "$HOPWORLD_TOOLS_SHA256" = "FILL-IN-AT-LAUNCH" ]; then
+            echo "::error::This workflow is a template: fill in HOPWORLD_TOOLS_URL and HOPWORLD_TOOLS_SHA256 first."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/hopworld"
+          curl -fsSL --proto '=https' "$HOPWORLD_TOOLS_URL" -o "$RUNNER_TEMP/hopworld.tar.gz"
+          echo "$HOPWORLD_TOOLS_SHA256  $RUNNER_TEMP/hopworld.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/hopworld.tar.gz" -C "$RUNNER_TEMP/hopworld" --strip-components=1
+          cd "$RUNNER_TEMP/hopworld/src"
+          npm ci --ignore-scripts --no-audit --no-fund
+          echo "HOPWORLD_SRC=$RUNNER_TEMP/hopworld/src" >> "$GITHUB_ENV"
+
+      - name: Find the submission folders in this pull request
+        id: folders
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          # games/<owner>/<name>/... and characters/<owner>/<name>/... -> one line per folder
+          grep -E '^(games|characters)/[^/]+/[^/]+/' "$RUNNER_TEMP/changed.txt" | cut -d/ -f1-3 | sort -u > "$RUNNER_TEMP/folders.txt" || true
+          # anything else in the pull request needs a maintainer
+          grep -vE '^(games|characters)/[^/]+/[^/]+/' "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/other.txt" || true
+          if [ -s "$RUNNER_TEMP/other.txt" ]; then
+            echo "::warning::This pull request also changes files outside a submission folder; a maintainer looks at them:"
+            cat "$RUNNER_TEMP/other.txt"
+          fi
+          echo "Submission folders:"; cat "$RUNNER_TEMP/folders.txt"
+
+      - name: Check each submission
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/reports"
+          status=0
+          port=4850
+          while IFS= read -r folder; do
+            [ -n "$folder" ] || continue
+            slug="$(echo "$folder" | tr '/' '-')"
+            if [ ! -d "$folder" ]; then
+              echo "== $folder: removed in this pull request. A maintainer takes it off the site (publish.mjs --remove)."
+              continue
+            fi
+            echo "== $folder"
+            node "$HOPWORLD_SRC/submit/check.mjs" "$folder" --author "$AUTHOR" --port "$port" --out "$RUNNER_TEMP/reports/$slug" || status=1
+            port=$((port + 2))
+          done < "$RUNNER_TEMP/folders.txt"
+          exit $status
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hopworld-check-reports
+          path: ${{ runner.temp }}/reports
+          if-no-files-found: ignore
+          retention-days: 14
